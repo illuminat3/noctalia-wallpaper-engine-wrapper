@@ -34,10 +34,21 @@ jq --argjson hide "$HIDE" --argjson day "$DAY" --argjson night "$NIGHT" '
       elif .id == $day then .visible = false | .alpha = 1
       elif .id == $night then .visible = true | .alpha = 1
       else . end)
+  # Black overlay over the whole scene, its opacity driven by the "darkness" property
+  | .general.orthogonalprojection as $size
+  | .objects += [{
+      id: 99999, name: "Darkness overlay", image: "models/util/solidlayer.json",
+      origin: "\($size.width / 2) \($size.height / 2) 0", size: "\($size.width) \($size.height)",
+      angles: "0 0 0", scale: "1 1 1", color: "0 0 0", colorBlendMode: 0,
+      alpha: {user: "darkness", value: 0}, visible: true
+    }]
 ' "$OUT/scene.json" >"$OUT/scene.json.tmp"
 mv "$OUT/scene.json.tmp" "$OUT/scene.json"
 
-jq '.title = "Mount Fuji (Night, no widgets)" | .file = "scene.json" | del(.workshopid)' \
+jq '.title = "Mount Fuji (Night, no widgets)" | .file = "scene.json" | del(.workshopid)
+    | .general.properties.darkness = {
+        order: -1, text: "Darkness", type: "slider", value: 0, min: 0, max: 0.9, step: 0.05, precision: 2, fraction: true
+      }' \
     "$SRC/project.json" >"$OUT/project.json"
 
 echo "Built $OUT (wallpaper set mount-fuji-night)"

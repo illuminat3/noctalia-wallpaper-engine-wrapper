@@ -61,7 +61,7 @@ Any wallpaper folder (with a `project.json`) in `~/.local/share/wallpaper/custom
 
 Some wallpapers rely on scripts linux-wallpaperengine doesn't fully run, so their settings have no effect. The scripts in `custom/` build patched copies instead:
 
-- `custom/mount-fuji-night.sh` — Mount Fuji (3613126158) permanently at night with all widgets (notch, media info, audio visualizer, app dock) removed. Needs `python`.
+- `custom/mount-fuji-night.sh` — Mount Fuji (3613126158) permanently at night with all widgets (notch, media info, audio visualizer, app dock) removed, plus a "Darkness" slider in `wallpaper props`. Needs `python`.
 
 ```sh
 custom/mount-fuji-night.sh
