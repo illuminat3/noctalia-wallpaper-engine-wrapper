@@ -8,16 +8,19 @@ A small `wallpaper` command for running Steam Wallpaper Engine wallpapers on Hyp
 - Wallpaper Engine installed through Steam (for its assets) and some subscribed Workshop wallpapers
 - [chafa](https://github.com/hpjansson/chafa) for previews outside kitty
 - `fzf`, `jq` and `hyprctl` (Hyprland)
+- [gtk4-layer-shell](https://github.com/wmww/gtk4-layer-shell) and `python-gobject` for `brightness`/`dim`
 
 ```sh
-sudo pacman -S chafa fzf jq
+sudo pacman -S chafa fzf jq gtk4-layer-shell python-gobject
 ```
 
 ## Install
 
 ```sh
-cp wallpaper ~/.local/bin/
+ln -s "$PWD/wallpaper" ~/.local/bin/wallpaper
 ```
+
+The script finds `dim-overlay.py` next to its real path, so symlink it rather than copying.
 
 Edit `STEAM_LIBS` at the top of the script so it points at your Steam library folders.
 
@@ -44,6 +47,8 @@ wallpaper get                                show the current wallpaper
 wallpaper get <id|name>                      id -> name, or name -> id
 wallpaper list, ls                           list downloaded wallpapers (* = current)
 wallpaper props [id|name]                    edit wallpaper settings (default: current)
+wallpaper brightness [0-1]                   show/set brightness for all wallpapers (1 = full)
+wallpaper dim [0-1]                          same value inverted (0 = no dimming, 1 = black)
 wallpaper restore                            start the saved wallpaper (runs at login)
 wallpaper stop                               stop the wallpaper
 ```
@@ -53,6 +58,7 @@ wallpaper stop                               stop the wallpaper
 - `select` shows a preview of each wallpaper. In kitty it uses `kitten icat`; in other terminals it uses chafa.
 - `props` opens a settings editor: ↑/↓ to move, ←/→ to adjust sliders and options, Enter to toggle (or type an exact slider value / hex color), `r` to reset, Esc to quit. Changes apply live and are saved per wallpaper. Settings that depend on another one only show when it's enabled.
 - Settings that hide others (often section headers like "Time notch") show `(N hidden)`; turn them on to reach the real switches underneath.
+- `brightness`/`dim` draw a click-through black layer (`dim-overlay.py`) above the wallpaper and below windows, so they work for every wallpaper, video ones included. The wallpaper runs on the layer-shell `background` layer for this.
 - The current wallpaper and mode are saved in `~/.config/wallpaper/state`, property overrides in `~/.config/wallpaper/props/<id>.json`; output goes to `~/.cache/wallpaper.log`.
 
 ## Custom wallpapers

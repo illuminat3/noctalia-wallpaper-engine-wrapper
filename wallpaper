@@ -6,6 +6,7 @@
 #   wallpaper get [id|name]
 #   wallpaper list | ls
 #   wallpaper props [id|name]
+#   wallpaper brightness [0-1] | dim [0-1]
 #   wallpaper restore        (used at login)
 #   wallpaper stop
 
@@ -21,6 +22,8 @@ PROC_PATTERN="(^|/)linux-wallpaperengine( |$)"
 PROPS_DIR="$STATE_DIR/props"
 APPLY_TOKEN="$STATE_DIR/.apply"
 SELF=$(realpath "$0")
+DIM_OVERLAY="$(dirname "$SELF")/dim-overlay.py"
+LAYER_SHELL_LIB=/usr/lib/libgtk4-layer-shell.so
 
 die() { echo "wallpaper: $*" >&2; exit 1; }
 
@@ -70,18 +73,19 @@ monitors() {
 }
 
 load_state() {
-    ID="" MODE="clone"
+    ID="" MODE="clone" BRIGHTNESS=1
     [[ -f $STATE_FILE ]] && source "$STATE_FILE"
 }
 
 save_state() {
     mkdir -p "$STATE_DIR"
-    printf 'ID=%q\nMODE=%q\n' "$1" "$2" >"$STATE_FILE"
+    printf 'ID=%q\nMODE=%q\nBRIGHTNESS=%q\n' "$1" "$2" "${BRIGHTNESS:-1}" >"$STATE_FILE"
 }
 
 launch() {
     local path=$1 mode=$2 mon
-    local args=(--assets-dir "$(assets_dir)" --silent --fps "$FPS")
+    # Background layer so the dim overlay (bottom layer) can sit above it
+    local args=(--assets-dir "$(assets_dir)" --silent --fps "$FPS" --layer background)
     mapfile -t mons < <(monitors)
     (( ${#mons[@]} )) || die "no monitors found (is Hyprland running?)"
     if [[ $mode == stretch ]]; then
@@ -98,6 +102,49 @@ launch() {
     pkill -f "$PROC_PATTERN" && sleep 0.3
     mkdir -p "$(dirname "$LOG_FILE")"
     setsid -f linux-wallpaperengine "${args[@]}" >"$LOG_FILE" 2>&1
+    start_overlay
+}
+
+# --- brightness ---------------------------------------------------------------
+
+stop_overlay() {
+    pkill -f "$DIM_OVERLAY" 2>/dev/null
+    return 0
+}
+
+# (Re)starts the overlay for the saved brightness; nothing at full brightness
+start_overlay() {
+    stop_overlay
+    load_state
+    local opacity
+    opacity=$(awk -v b="$BRIGHTNESS" 'BEGIN { printf "%.3f", 1 - b }')
+    awk -v o="$opacity" 'BEGIN { exit !(o > 0) }' || return 0
+    [[ -f $LAYER_SHELL_LIB ]] || { echo "wallpaper: install gtk4-layer-shell to dim the wallpaper" >&2; return 0; }
+    LD_PRELOAD=$LAYER_SHELL_LIB setsid -f python3 "$DIM_OVERLAY" "$opacity" >>"$LOG_FILE" 2>&1
+}
+
+# cmd_brightness <brightness|dim> [value]
+cmd_brightness() {
+    local kind=$1 value=${2:-}
+    load_state
+    if [[ -z $value ]]; then
+        if [[ $kind == dim ]]; then
+            awk -v b="$BRIGHTNESS" 'BEGIN { print 1 - b }'
+        else
+            echo "$BRIGHTNESS"
+        fi
+        return
+    fi
+    [[ $value =~ ^[0-9]*\.?[0-9]+$ ]] && awk -v v="$value" 'BEGIN { exit !(v >= 0 && v <= 1) }' \
+        || die "$kind must be a number from 0 to 1"
+    if [[ $kind == dim ]]; then
+        BRIGHTNESS=$(awk -v d="$value" 'BEGIN { print 1 - d }')
+    else
+        BRIGHTNESS=$(awk -v b="$value" 'BEGIN { print b + 0 }')
+    fi
+    save_state "$ID" "$MODE"
+    pgrep -f "$PROC_PATTERN" >/dev/null && start_overlay
+    echo "Brightness $BRIGHTNESS (dim $(awk -v b="$BRIGHTNESS" 'BEGIN { print 1 - b }'))"
 }
 
 # Parses --clone/--stretch out of the arguments; leftover words go in REST
@@ -162,7 +209,7 @@ cmd_get() {
         IFS=$'\t' read -r id type title path <<<"$(resolve "$ID")"
         local running="stopped"
         pgrep -f "$PROC_PATTERN" >/dev/null && running="running"
-        echo "$title ($id, $type) [$MODE, $running]"
+        echo "$title ($id, $type) [$MODE, brightness $BRIGHTNESS, $running]"
         return
     fi
     IFS=$'\t' read -r id type title path <<<"$(resolve "$*")"
@@ -361,6 +408,8 @@ usage: wallpaper <command> [args]
   get <id|name>                      id -> name, or name -> id
   list, ls                           list downloaded wallpapers (* = current)
   props [id|name]                    edit wallpaper settings (default: current)
+  brightness [0-1]                   show/set brightness for all wallpapers (1 = full)
+  dim [0-1]                          same value inverted (0 = none, 1 = black)
   restore                            start the saved wallpaper (runs at login)
   stop                               stop the wallpaper
 
@@ -375,10 +424,11 @@ case ${1:-} in
     get) shift; cmd_get "$@" ;;
     list|ls) cmd_list ;;
     props) shift; cmd_props "$@" ;;
+    brightness|dim) cmd_brightness "$@" ;;
     _prop) shift; cmd_prop "$@" ;;
     restore) cmd_restore ;;
     _preview) shift; cmd_preview "$@" ;;
-    stop) pkill -f "$PROC_PATTERN"; echo "Stopped" ;;
+    stop) pkill -f "$PROC_PATTERN"; stop_overlay; echo "Stopped" ;;
     -h|--help|help|"") usage ;;
     *) die "unknown command '$1' (try: wallpaper help)" ;;
 esac
