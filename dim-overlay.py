@@ -19,7 +19,7 @@ opacity = max(0.0, min(1.0, float(sys.argv[1])))
 
 
 def make_overlay(app, monitor):
-    win = Gtk.Window(application=app)
+    win = Gtk.Window(application=app, decorated=False)
     LayerShell.init_for_window(win)
     LayerShell.set_namespace(win, 'wallpaper-dim')
     LayerShell.set_layer(win, LayerShell.Layer.BOTTOM)
@@ -28,6 +28,7 @@ def make_overlay(app, monitor):
     LayerShell.set_keyboard_mode(win, LayerShell.KeyboardMode.NONE)
     for edge in (LayerShell.Edge.TOP, LayerShell.Edge.BOTTOM, LayerShell.Edge.LEFT, LayerShell.Edge.RIGHT):
         LayerShell.set_anchor(win, edge, True)
+        LayerShell.set_margin(win, edge, 0)
     win.add_css_class('dim')
     # Empty input region so clicks pass through to whatever is below
     win.connect('realize', lambda w: w.get_surface().set_input_region(cairo.Region()))
@@ -36,7 +37,11 @@ def make_overlay(app, monitor):
 
 def on_activate(app):
     css = Gtk.CssProvider()
-    css.load_from_string(f'window.dim {{ background: rgba(0, 0, 0, {opacity}); }}')
+    # Strip the theme's shadow, border, rounded corners and margins so the
+    # overlay reaches every edge of the monitor
+    css.load_from_string(
+        f'window.dim {{ background: rgba(0, 0, 0, {opacity}); margin: 0; padding: 0;'
+        ' border: none; border-radius: 0; box-shadow: none; outline: none; }')
     Gtk.StyleContext.add_provider_for_display(
         Gdk.Display.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
     monitors = Gdk.Display.get_default().get_monitors()
