@@ -86,7 +86,7 @@ launch() {
     local path=$1 mode=$2 mon
     # Background layer so the dim overlay (bottom layer) can sit above it
     local args=(--assets-dir "$(assets_dir)" --silent --fps "$FPS" --layer background \
-        --fullscreen-pause-only-active)
+        --no-fullscreen-pause)
     mapfile -t mons < <(monitors)
     (( ${#mons[@]} )) || die "no monitors found (is Hyprland running?)"
     if [[ $mode == stretch ]]; then
