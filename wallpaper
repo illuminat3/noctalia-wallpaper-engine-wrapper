@@ -12,6 +12,7 @@
 set -u
 
 STEAM_LIBS=(/mnt/storage/SteamLibrary "$HOME/.local/share/Steam")
+CUSTOM_DIR="$HOME/.local/share/wallpaper/custom"
 STATE_DIR="$HOME/.config/wallpaper"
 STATE_FILE="$STATE_DIR/state"
 LOG_FILE="$HOME/.cache/wallpaper.log"
@@ -31,15 +32,17 @@ assets_dir() {
     die "Wallpaper Engine assets not found"
 }
 
-# Prints "id<TAB>type<TAB>title<TAB>path" for every downloaded wallpaper
+# Prints "id<TAB>type<TAB>title<TAB>path" for every downloaded or custom wallpaper
 catalog() {
-    local lib dir
+    local lib dir dirs=()
     for lib in "${STEAM_LIBS[@]}"; do
-        for dir in "$lib"/steamapps/workshop/content/431960/*/; do
-            [[ -f $dir/project.json ]] || continue
-            jq -r --arg id "$(basename "$dir")" --arg path "${dir%/}" \
-                '[$id, (.type // "?" | ascii_downcase), (.title // "?"), $path] | @tsv' "$dir/project.json" 2>/dev/null
-        done
+        dirs+=("$lib"/steamapps/workshop/content/431960/*/)
+    done
+    dirs+=("$CUSTOM_DIR"/*/)
+    for dir in "${dirs[@]}"; do
+        [[ -f $dir/project.json ]] || continue
+        jq -r --arg id "$(basename "$dir")" --arg path "${dir%/}" \
+            '[$id, (.type // "?" | ascii_downcase), (.title // "?"), $path] | @tsv' "$dir/project.json" 2>/dev/null
     done
 }
 
@@ -47,9 +50,8 @@ catalog() {
 resolve() {
     local query=$1 cat matches
     cat=$(catalog)
-    if [[ $query =~ ^[0-9]+$ ]]; then
-        matches=$(awk -F'\t' -v q="$query" '$1 == q' <<<"$cat")
-    else
+    matches=$(awk -F'\t' -v q="$query" '$1 == q' <<<"$cat")
+    if [[ -z $matches && ! $query =~ ^[0-9]+$ ]]; then
         matches=$(awk -F'\t' -v q="${query,,}" 'tolower($3) == q' <<<"$cat")
         [[ -z $matches ]] && matches=$(awk -F'\t' -v q="${query,,}" 'index(tolower($3), q)' <<<"$cat")
     fi
@@ -164,13 +166,13 @@ cmd_get() {
         return
     fi
     IFS=$'\t' read -r id type title path <<<"$(resolve "$*")"
-    if [[ $1 =~ ^[0-9]+$ ]]; then echo "$title"; else echo "$id"; fi
+    if [[ $* == "$id" ]]; then echo "$title"; else echo "$id"; fi
 }
 
 cmd_list() {
     load_state
     catalog | sort -t$'\t' -k3,3f | awk -F'\t' -v cur="$ID" \
-        '{ printf "%s %-12s %-7s %s\n", ($1 == cur ? "*" : " "), $1, $2, $3 }'
+        '{ printf "%s %-17s %-7s %s\n", ($1 == cur ? "*" : " "), $1, $2, $3 }'
 }
 
 cmd_restore() {
@@ -214,8 +216,10 @@ def clause($all): capture("^\\s*(?<k>[A-Za-z0-9_]+)\\.value\\s*((?<op>==|!=)\\s*
 def visible($all): (.value.condition // "") as $c
     | if $c == "" or ($c | test("\\|\\|")) then true
       else $c | split("&&") | all(clause($all)) end;
-def rows: ((.general.properties // {}) | to_entries) as $all | props[] | select(visible($all))
+def rows: ((.general.properties // {}) | to_entries) as $all | props as $props | $props[] | select(visible($all))
     | .key as $key | .value as $d | cur as $v
+    # Settings tucked under this one (e.g. a section header) that are currently hidden
+    | ([$props[] | select((.value.condition // "") | test("(^|[^A-Za-z0-9_])\($key)\\.value")) | select(visible($all) | not)] | length) as $hidden
     | ((title | if . == "" then null else . end) // $key) as $name
     | (if $d.condition then "  " + $name else $name end) as $l
     | (if $d.type == "bool" then (if ($v | norm) == "1" then "[x]" else "[ ]" end)
@@ -228,7 +232,9 @@ def rows: ((.general.properties // {}) | to_entries) as $all | props[] | select(
        else ($v | rgb) as $c | "\u001b[48;2;\($c[0]);\($c[1]);\($c[2])m      \u001b[0m #\($c | hex)"
        end) as $disp
     | ($l | .[0:38]) as $l
-    | [$key, $d.type, $l + repeat(" "; 40 - ($l | length)) + $disp + (if $o | has($key) then "  *" else "" end)]
+    | [$key, $d.type, $l + repeat(" "; 40 - ($l | length)) + $disp
+        + (if $hidden > 0 then "  \u001b[2m(\($hidden) hidden)\u001b[0m" else "" end)
+        + (if $o | has($key) then "  *" else "" end)]
     | @tsv;
 def adjust: props[] | select(.key == $k) | .value as $d | cur as $v
     | if $d.type == "bool" then

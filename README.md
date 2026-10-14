@@ -52,4 +52,18 @@ wallpaper stop                               stop the wallpaper
 - Names are case-insensitive; a partial name works if it matches only one wallpaper.
 - `select` shows a preview of each wallpaper. In kitty it uses `kitten icat`; in other terminals it uses chafa.
 - `props` opens a settings editor: ↑/↓ to move, ←/→ to adjust sliders and options, Enter to toggle (or type an exact slider value / hex color), `r` to reset, Esc to quit. Changes apply live and are saved per wallpaper. Settings that depend on another one only show when it's enabled.
+- Settings that hide others (often section headers like "Time notch") show `(N hidden)`; turn them on to reach the real switches underneath.
 - The current wallpaper and mode are saved in `~/.config/wallpaper/state`, property overrides in `~/.config/wallpaper/props/<id>.json`; output goes to `~/.cache/wallpaper.log`.
+
+## Custom wallpapers
+
+Any wallpaper folder (with a `project.json`) in `~/.local/share/wallpaper/custom/<id>/` shows up alongside Workshop items, using the folder name as its id.
+
+Some wallpapers rely on scripts linux-wallpaperengine doesn't fully run, so their settings have no effect. The scripts in `custom/` build patched copies instead:
+
+- `custom/mount-fuji-night.sh` — Mount Fuji (3613126158) permanently at night with all widgets (notch, media info, audio visualizer, app dock) removed. Needs `python`.
+
+```sh
+custom/mount-fuji-night.sh
+wallpaper set mount-fuji-night
+```
