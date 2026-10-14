@@ -43,6 +43,7 @@ wallpaper select [--stretch|--clone]         pick a wallpaper with arrow keys + 
 wallpaper get                                show the current wallpaper
 wallpaper get <id|name>                      id -> name, or name -> id
 wallpaper list, ls                           list downloaded wallpapers (* = current)
+wallpaper props [id|name]                    edit wallpaper settings (default: current)
 wallpaper restore                            start the saved wallpaper (runs at login)
 wallpaper stop                               stop the wallpaper
 ```
@@ -50,4 +51,5 @@ wallpaper stop                               stop the wallpaper
 - `--clone` (default) shows the wallpaper on every monitor; `--stretch` spans it across all monitors left to right. The last mode used is remembered.
 - Names are case-insensitive; a partial name works if it matches only one wallpaper.
 - `select` shows a preview of each wallpaper. In kitty it uses `kitten icat`; in other terminals it uses chafa.
-- The current wallpaper and mode are saved in `~/.config/wallpaper/state`; output goes to `~/.cache/wallpaper.log`.
+- `props` opens a settings editor: ↑/↓ to move, ←/→ to adjust sliders and options, Enter to toggle (or type an exact slider value / hex color), `r` to reset, Esc to quit. Changes apply live and are saved per wallpaper. Settings that depend on another one only show when it's enabled.
+- The current wallpaper and mode are saved in `~/.config/wallpaper/state`, property overrides in `~/.config/wallpaper/props/<id>.json`; output goes to `~/.cache/wallpaper.log`.

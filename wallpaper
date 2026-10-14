@@ -5,6 +5,7 @@
 #   wallpaper select [--clone|--stretch]
 #   wallpaper get [id|name]
 #   wallpaper list | ls
+#   wallpaper props [id|name]
 #   wallpaper restore        (used at login)
 #   wallpaper stop
 
@@ -16,6 +17,9 @@ STATE_FILE="$STATE_DIR/state"
 LOG_FILE="$HOME/.cache/wallpaper.log"
 FPS=30
 PROC_PATTERN="(^|/)linux-wallpaperengine( |$)"
+PROPS_DIR="$STATE_DIR/props"
+APPLY_TOKEN="$STATE_DIR/.apply"
+SELF=$(realpath "$0")
 
 die() { echo "wallpaper: $*" >&2; exit 1; }
 
@@ -85,6 +89,10 @@ launch() {
             args+=(--screen-root "$mon" --bg "$path" --scaling fill)
         done
     fi
+    local prop
+    while IFS= read -r prop; do
+        [[ -n $prop ]] && args+=(--set-property "$prop")
+    done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<<"$(overrides "$(basename "$path")")")
     pkill -f "$PROC_PATTERN" && sleep 0.3
     mkdir -p "$(dirname "$LOG_FILE")"
     setsid -f linux-wallpaperengine "${args[@]}" >"$LOG_FILE" 2>&1
@@ -178,6 +186,165 @@ cmd_restore() {
     launch "$(cut -f4 <<<"$line")" "$MODE"
 }
 
+# --- properties -------------------------------------------------------------
+
+# jq helpers over a wallpaper's project.json. $o holds the saved overrides,
+# $k the property being changed and $step the direction (+, -, toggle).
+PROPS_JQ='
+def cur: $o[.key] // (.value.value | if type == "boolean" then (if . then "1" else "0" end) else tostring end);
+def norm: tostring | gsub("^[\"'"'"' ]+|[\"'"'"' ]+$"; "") | if . == "true" then "1" elif . == "false" then "0" else . end;
+def title: (.value.text // "")
+    | if startswith("ui_browse_properties_") then .[21:] | gsub("_"; " ") else . end
+    | gsub("<[^>]*>"; "") | gsub("[‎ㅤ ]"; " ") | gsub("\\s+"; " ") | gsub("^ | $"; "");
+def prec: .precision // (if (.step // 1) < 1 then 2 else 0 end);
+def fmt($p): if $p == 0 then round | tostring else (. * pow(10; $p) | round) / pow(10; $p) | tostring end;
+def rgb: split(" ") | map(select(. != "") | tonumber * 255 | round | [., 0] | max | [., 255] | min) | .[0:3];
+def hex: map([(. / 16 | floor), (. % 16)] | map("0123456789abcdef"[.:. + 1]) | join("")) | join("");
+def repeat($s; $n): [range($n)] | map($s) | join("");
+def props: (.general.properties // {}) | to_entries
+    | map(select((.value.type | IN("bool", "slider", "combo", "color")) and .key != "schemecolor"))
+    | sort_by(.value.order // .value.index // 0);
+# Hides properties whose "a.value == x && b.value" style condition is false
+def clause($all): capture("^\\s*(?<k>[A-Za-z0-9_]+)\\.value\\s*((?<op>==|!=)\\s*(?<v>.+?))?\\s*$")? // null
+    | . as $m | ($all | map(select(.key == $m.k)) | .[0]) as $p
+    | if $m == null or $p == null then true
+      elif $m.op == null then ($p | cur | norm) | . != "0" and . != ""
+      elif $m.op == "==" then ($p | cur | norm) == ($m.v | norm)
+      else ($p | cur | norm) != ($m.v | norm) end;
+def visible($all): (.value.condition // "") as $c
+    | if $c == "" or ($c | test("\\|\\|")) then true
+      else $c | split("&&") | all(clause($all)) end;
+def rows: ((.general.properties // {}) | to_entries) as $all | props[] | select(visible($all))
+    | .key as $key | .value as $d | cur as $v
+    | ((title | if . == "" then null else . end) // $key) as $name
+    | (if $d.condition then "  " + $name else $name end) as $l
+    | (if $d.type == "bool" then (if ($v | norm) == "1" then "[x]" else "[ ]" end)
+       elif $d.type == "slider" then
+         ($v | tonumber) as $n | ($d.min // 0) as $mn | ($d.max // 1) as $mx
+         | (if $mx > $mn then ($n - $mn) / ($mx - $mn) * 20 | round else 0 end | [., 0] | max | [., 20] | min) as $f
+         | "◀ \(repeat("█"; $f))\(repeat("░"; 20 - $f)) ▶ \($n | fmt($d | prec))"
+       elif $d.type == "combo" then
+         "◀ \(($d.options // []) | map(select((.value | tostring) == $v)) | .[0].label // $v) ▶"
+       else ($v | rgb) as $c | "\u001b[48;2;\($c[0]);\($c[1]);\($c[2])m      \u001b[0m #\($c | hex)"
+       end) as $disp
+    | ($l | .[0:38]) as $l
+    | [$key, $d.type, $l + repeat(" "; 40 - ($l | length)) + $disp + (if $o | has($key) then "  *" else "" end)]
+    | @tsv;
+def adjust: props[] | select(.key == $k) | .value as $d | cur as $v
+    | if $d.type == "bool" then
+        if $step == "toggle" then (if ($v | norm) == "1" then "0" else "1" end)
+        elif $step == "+" then "1" else "0" end
+      elif $d.type == "slider" then
+        ($v | tonumber) + (if $step == "-" then -1 else 1 end) * ($d.step // 1)
+        | [., $d.min // 0] | max | [., $d.max // 1] | min | fmt($d | prec)
+      elif $d.type == "combo" then
+        (($d.options // []) | map(.value | tostring)) as $ov
+        | if ($ov | length) == 0 then empty
+          else $ov[((($ov | index($v)) // 0) + (if $step == "-" then -1 else 1 end)) % ($ov | length)] end
+      else empty end;
+def info: props[] | select(.key == $k) | .value as $d | cur as $v
+    | [$d.type, $v, ($d.min // 0), ($d.max // 1), (if $d.type == "color" then $v | rgb | hex else "" end)] | @tsv;
+'
+
+overrides() {
+    local f="$PROPS_DIR/$1.json"
+    if [[ -s $f ]]; then cat "$f"; else echo '{}'; fi
+}
+
+# prop_jq <id> <dir> <filter> [key] [step]
+prop_jq() {
+    jq -r --argjson o "$(overrides "$1")" --arg k "${4:-}" --arg step "${5:-}" \
+        "$PROPS_JQ $3" "$2/project.json"
+}
+
+# set_override <id> <key> [value]   (no value = reset to default)
+set_override() {
+    local f="$PROPS_DIR/$1.json" new
+    mkdir -p "$PROPS_DIR"
+    if (( $# == 3 )); then
+        new=$(overrides "$1" | jq --arg k "$2" --arg v "$3" '.[$k] = $v')
+    else
+        new=$(overrides "$1" | jq --arg k "$2" 'del(.[$k])')
+    fi
+    echo "$new" >"$f"
+}
+
+# Restarts the wallpaper shortly after the last change, if it is the current one
+schedule_apply() {
+    load_state
+    [[ $1 == "$ID" ]] || return 0
+    local tok=$EPOCHREALTIME
+    mkdir -p "$STATE_DIR"
+    echo "$tok" >"$APPLY_TOKEN"
+    setsid -f bash -c 'sleep 0.7; [[ $(cat "$1") == "$2" ]] && exec "$3" restore' \
+        _ "$APPLY_TOKEN" "$tok" "$SELF" >/dev/null 2>&1
+}
+
+# Prompts for an exact slider value or a hex color
+prop_edit() {
+    local id=$1 dir=$2 key=$3 type val min max hex input
+    IFS=$'\t' read -r type val min max hex < <(prop_jq "$id" "$dir" info "$key")
+    exec </dev/tty >/dev/tty 2>&1
+    case $type in
+        slider)
+            read -r -e -p "Value ($min to $max): " -i "$val" input || return
+            [[ $input =~ ^-?[0-9]*\.?[0-9]+$ ]] || return
+            set_override "$id" "$key" "$(awk -v x="$input" -v a="$min" -v b="$max" \
+                'BEGIN { x += 0; if (x < a) x = a; if (x > b) x = b; print x }')"
+            ;;
+        color)
+            read -r -e -p "Hex color: " -i "#$hex" input || return
+            input=${input#\#}
+            [[ $input =~ ^[0-9a-fA-F]{6}$ ]] || return
+            set_override "$id" "$key" "$(awk -v r=$((16#${input:0:2})) -v g=$((16#${input:2:2})) -v b=$((16#${input:4:2})) \
+                'BEGIN { printf "%.4f %.4f %.4f", r / 255, g / 255, b / 255 }')"
+            ;;
+        bool|combo) set_override "$id" "$key" "$(prop_jq "$id" "$dir" adjust "$key" toggle)" ;;
+        *) return ;;
+    esac
+}
+
+# Internal commands called by the fzf bindings in cmd_props
+cmd_prop() {
+    local id=$1 dir=$2 action=$3 key=${4:-} v
+    case $action in
+        rows) prop_jq "$id" "$dir" rows ;;
+        step)
+            v=$(prop_jq "$id" "$dir" adjust "$key" "$5")
+            [[ -n $v ]] || return 0
+            set_override "$id" "$key" "$v"
+            schedule_apply "$id"
+            ;;
+        edit) prop_edit "$id" "$dir" "$key" && schedule_apply "$id" ;;
+        reset) set_override "$id" "$key"; schedule_apply "$id" ;;
+    esac
+}
+
+cmd_props() {
+    local line id type title path
+    if (( $# )); then
+        line=$(resolve "$*")
+    else
+        load_state
+        [[ -n $ID ]] || die "no wallpaper set yet"
+        line=$(resolve "$ID")
+    fi
+    IFS=$'\t' read -r id type title path <<<"$line"
+    [[ -n $(prop_jq "$id" "$path" rows) ]] || { echo "\"$title\" has no adjustable properties"; return; }
+
+    local p="$(printf %q "$SELF") _prop $id $(printf %q "$path")"
+    prop_jq "$id" "$path" rows | fzf --ansi --no-input --reverse --height=80% \
+        --delimiter=$'\t' --with-nth=3 --id-nth=1 --track \
+        --border=rounded --border-label=" $title " \
+        --header='↑↓ move  ←→ adjust  enter toggle/edit  r reset  esc quit  (* = changed)' \
+        --with-shell="bash -c" \
+        --bind="right:execute-silent($p step {1} +)+reload($p rows)" \
+        --bind="left:execute-silent($p step {1} -)+reload($p rows)" \
+        --bind="enter:transform:[[ {2} == slider || {2} == color ]] && echo \"execute($p edit {1})+reload($p rows)\" || echo \"execute-silent($p step {1} toggle)+reload($p rows)\"" \
+        --bind="r:execute-silent($p reset {1})+reload($p rows)" \
+        --bind="q:abort" >/dev/null || true
+}
+
 usage() {
     cat <<EOF
 usage: wallpaper <command> [args]
@@ -187,6 +354,7 @@ usage: wallpaper <command> [args]
   get                                show the current wallpaper
   get <id|name>                      id -> name, or name -> id
   list, ls                           list downloaded wallpapers (* = current)
+  props [id|name]                    edit wallpaper settings (default: current)
   restore                            start the saved wallpaper (runs at login)
   stop                               stop the wallpaper
 
@@ -200,6 +368,8 @@ case ${1:-} in
     select) shift; cmd_select "$@" ;;
     get) shift; cmd_get "$@" ;;
     list|ls) cmd_list ;;
+    props) shift; cmd_props "$@" ;;
+    _prop) shift; cmd_prop "$@" ;;
     restore) cmd_restore ;;
     _preview) shift; cmd_preview "$@" ;;
     stop) pkill -f "$PROC_PATTERN"; echo "Stopped" ;;
